@@ -142,6 +142,13 @@ class PypError(Exception):
     pass
 
 
+MAGIC_VARS = {
+    "index": {"i", "idx", "index"},
+    "loop": {"line", "x", "l"},
+    "input": {"lines", "stdin"},
+}
+
+
 class PypConfig:
     """PypConfig is responsible for handling user configuration.
 
@@ -263,6 +270,41 @@ class PypTransform:
         # The print statement ``build_output`` will add, if it determines it needs to.
         self.implicit_print: Optional[ast.Call] = None
 
+    def build_missing_config(self) -> None:
+        """Modifies the AST to define undefined names defined in config."""
+        config_definitions: Set[str] = set()
+        attempt_to_define = set(self.undefined)
+        while attempt_to_define:
+            can_define = attempt_to_define & set(self.config.name_to_def)
+            config_definitions.update(can_define)
+            # The things we can define might in turn require some definitions, so update the things
+            # we need to attempt to define and loop
+            attempt_to_define = set()
+            for name in can_define:
+                attempt_to_define.update(self.config.requires[self.config.name_to_def[name]])
+            # We don't need to attempt to define things we've already decided we need to define
+            attempt_to_define -= config_definitions
+
+        def is_magic_var(name: str) -> bool:
+            return any(name in vars for vars in MAGIC_VARS.values())
+
+        config_indices = sorted({self.config.name_to_def[name] for name in config_definitions})
+        magic_config_defs, before_config_defs = [], []
+        for i in config_indices:
+            if any(map(is_magic_var, self.config.requires[i])):
+                magic_config_defs.append(self.config.parts[i])
+            else:
+                before_config_defs.append(self.config.parts[i])
+            self.undefined.update(self.config.requires[i])
+
+        self.tree.body = magic_config_defs + self.tree.body
+        self.before_tree.body = before_config_defs + self.before_tree.body
+        # Note, the config parts we define might actually define more names than just the names we
+        # need (e.g, through tuple assignment or walrus). But we don't need those names, i.e., we
+        # don't actually use them, so their omission from self.defined doesn't really matter.
+        self.defined |= config_definitions
+        self.undefined -= config_definitions
+
     def define(self, name: str) -> None:
         """Defines a name."""
         self.defined.add(name)
@@ -344,11 +386,6 @@ class PypTransform:
         How we do this depends on which magic variables are used.
 
         """
-        MAGIC_VARS = {
-            "index": {"i", "idx", "index"},
-            "loop": {"line", "x", "l", "s"},
-            "input": {"lines", "stdin"},
-        }
         possible_vars = {typ: names & self.undefined for typ, names in MAGIC_VARS.items()}
 
         if (possible_vars["loop"] or possible_vars["index"]) and possible_vars["input"]:
@@ -408,27 +445,6 @@ class PypTransform:
             self.tree.body = no_pipe_assertion.body + self.tree.body
             self.use_pypprint_for_implicit_print()
 
-    def build_missing_config(self) -> None:
-        """Modifies the AST to define undefined names defined in config."""
-        config_definitions: Set[str] = set()
-        attempt_to_define = set(self.undefined)
-        while attempt_to_define:
-            can_define = attempt_to_define & set(self.config.name_to_def)
-            config_definitions.update(can_define)
-            # The things we can define might in turn require some definitions, so update the things
-            # we need to attempt to define and loop
-            attempt_to_define = set()
-            for name in can_define:
-                attempt_to_define.update(self.config.requires[self.config.name_to_def[name]])
-            # We don't need to attempt to define things we've already decided we need to define
-            attempt_to_define -= config_definitions
-
-        config_indices = sorted({self.config.name_to_def[name] for name in config_definitions})
-        self.before_tree.body = [
-            self.config.parts[i] for i in config_indices
-        ] + self.before_tree.body
-        self.undefined -= config_definitions
-
     def build_missing_imports(self) -> None:
         """Modifies the AST to import undefined names."""
         self.undefined -= set(dir(__import__("builtins")))
@@ -475,9 +491,9 @@ class PypTransform:
 
     def build(self) -> ast.Module:
         """Returns a transformed AST."""
+        self.build_missing_config()
         self.build_output()
         self.build_input()
-        self.build_missing_config()
         self.build_missing_imports()
 
         ret = ast.parse("")
