@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Configuration now allows the use of magic variables, effectively allowing you to define your own
+magic variables. See README.md for details
+- Configs definitions can now use things defined from wildcard imports. Automatic imports now work
+in config as well
+- Explicit printing in called config functions will now disable automatic printing
+- Removed `s` as a magic variable. If you need you can redefine it in your config using `s = x`
+- Use of `pp` is now properly recognised as disabling automatic printing
+
 ## [v0.3.2]
 
 - Improved reconstructed tracebacks when errors occur in statements with nested child statements
