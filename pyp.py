@@ -196,7 +196,7 @@ class PypConfig:
                 # Functions and classes have their own scopes, so discard names that they define
                 _, undefs = find_names(part)
                 add_defs(index, {part.name})
-                self.requires[index].update(undefs)
+                self.requires[index] |= undefs
             elif isinstance(part, ast.ImportFrom):
                 if part.module is None:
                     raise PypError(f"Config has unsupported import on line {part.lineno}")
@@ -208,7 +208,7 @@ class PypConfig:
             elif isinstance(part, (ast.Import, ast.Assign, ast.AnnAssign)):
                 defs, undefs = find_names(part)
                 add_defs(index, defs)
-                self.requires[index].update(undefs)
+                self.requires[index] |= undefs
             elif hasattr(part, "body") or hasattr(part, "orelse"):
                 # This allows us to do e.g., basic conditional definition
                 for part in getattr(part, "body", []) + getattr(part, "orelse", []):
@@ -276,12 +276,12 @@ class PypTransform:
         attempt_to_define = set(self.undefined)
         while attempt_to_define:
             can_define = attempt_to_define & set(self.config.name_to_def)
-            config_definitions.update(can_define)
+            config_definitions |= can_define
             # The things we can define might in turn require some definitions, so update the things
             # we need to attempt to define and loop
             attempt_to_define = set()
             for name in can_define:
-                attempt_to_define.update(self.config.requires[self.config.name_to_def[name]])
+                attempt_to_define |= self.config.requires[self.config.name_to_def[name]]
             # We don't need to attempt to define things we've already decided we need to define
             attempt_to_define -= config_definitions
 
@@ -295,7 +295,7 @@ class PypTransform:
                 magic_config_defs.append(self.config.parts[i])
             else:
                 before_config_defs.append(self.config.parts[i])
-            self.undefined.update(self.config.requires[i])
+            self.undefined |= self.config.requires[i]
 
         self.tree.body = magic_config_defs + self.tree.body
         self.before_tree.body = before_config_defs + self.before_tree.body
