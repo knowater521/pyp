@@ -149,6 +149,10 @@ MAGIC_VARS = {
 }
 
 
+def is_magic_var(name: str) -> bool:
+    return any(name in vars for vars in MAGIC_VARS.values())
+
+
 class PypConfig:
     """PypConfig is responsible for handling user configuration.
 
@@ -189,6 +193,8 @@ class PypConfig:
             for name in defs:
                 if self.name_to_def.get(name, index) != index:
                     raise PypError(f"Config has multiple definitions of {repr(name)}")
+                if is_magic_var(name):
+                    raise PypError(f"Config cannot redefine built-in magic variable {repr(name)}")
                 self.name_to_def[name] = index
 
         def inner(index: int, part: ast.AST) -> None:
@@ -284,9 +290,6 @@ class PypTransform:
                 attempt_to_define |= self.config.requires[self.config.name_to_def[name]]
             # We don't need to attempt to define things we've already decided we need to define
             attempt_to_define -= config_definitions
-
-        def is_magic_var(name: str) -> bool:
-            return any(name in vars for vars in MAGIC_VARS.values())
 
         config_indices = sorted({self.config.name_to_def[name] for name in config_definitions})
         magic_config_defs, before_config_defs = [], []

@@ -349,6 +349,18 @@ def test_config_invalid(config_mock):
     with pytest.raises(pyp.PypError, match=r"Config.*unsupported construct \(delete\)"):
         run_pyp("x")
 
+    config_mock.return_value = "x = 8"
+    with pytest.raises(pyp.PypError, match=r"Config.*cannot redefine built-in.*'x'"):
+        run_pyp("x")
+
+    config_mock.return_value = "stdin = 5"
+    with pytest.raises(pyp.PypError, match=r"Config.*cannot redefine built-in.*'stdin'"):
+        run_pyp("type(stdin).__name__")
+
+    config_mock.return_value = "def f(x): stdin = 5"
+    run_pyp("x")
+    run_pyp("stdin")
+
     config_mock.return_value = "1 +"
     with pytest.raises(pyp.PypError, match="Config has invalid syntax"):
         run_pyp("x")
@@ -407,12 +419,6 @@ def test_config_shadow(config_mock):
     # shadowing a builtin
     config_mock.return_value = "range = 5"
     assert run_pyp("print(range)") == "5\n"
-
-    # shadowing a magic variable
-    config_mock.return_value = "stdin = 5"
-    assert run_pyp("type(stdin).__name__") == "StringIO\n"
-    config_mock.return_value = "x = 8"
-    assert run_pyp("x") == ""
 
     # shadowing a wildcard import
     config_mock.return_value = "from typing import *\nList = 5"
