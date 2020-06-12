@@ -602,7 +602,7 @@ def parse_options(args: List[str]) -> argparse.Namespace:
             "Easily run Python at the shell!\n\n"
             "For help and examples, see https://github.com/hauntsaninja/pyp\n\n"
             "Cheatsheet:\n"
-            "- Use `line`, `x`, `l`, or `s` for a line in the input. Use `i`, `idx` or `index` "
+            "- Use `x`, `l` or `line` for a line in the input. Use `i`, `idx` or `index` "
             "for the index\n"
             "- Use `lines` to get a list of rstripped lines\n"
             "- Use `stdin` to get sys.stdin\n"
