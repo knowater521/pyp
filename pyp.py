@@ -278,20 +278,20 @@ class PypTransform:
 
     def build_missing_config(self) -> None:
         """Modifies the AST to define undefined names defined in config."""
-        config_definitions: Set[str] = set()
+        config_defs_needed: Set[str] = set()
         attempt_to_define = set(self.undefined)
         while attempt_to_define:
             can_define = attempt_to_define & set(self.config.name_to_def)
-            config_definitions |= can_define
+            config_defs_needed |= can_define
             # The things we can define might in turn require some definitions, so update the things
             # we need to attempt to define and loop
             attempt_to_define = set()
             for name in can_define:
                 attempt_to_define |= self.config.requires[self.config.name_to_def[name]]
             # We don't need to attempt to define things we've already decided we need to define
-            attempt_to_define -= config_definitions
+            attempt_to_define -= config_defs_needed
 
-        config_indices = sorted({self.config.name_to_def[name] for name in config_definitions})
+        config_indices = sorted({self.config.name_to_def[name] for name in config_defs_needed})
         magic_config_defs, before_config_defs = [], []
         for i in config_indices:
             if any(map(is_magic_var, self.config.requires[i])):
@@ -305,8 +305,8 @@ class PypTransform:
         # Note, the config parts we define might actually define more names than just the names we
         # need (e.g, through tuple assignment or walrus). But we don't need those names, i.e., we
         # don't actually use them, so their omission from self.defined doesn't really matter.
-        self.defined |= config_definitions
-        self.undefined -= config_definitions
+        self.defined |= config_defs_needed
+        self.undefined -= config_defs_needed
 
     def define(self, name: str) -> None:
         """Defines a name."""
