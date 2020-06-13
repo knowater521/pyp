@@ -9,7 +9,7 @@ import sys
 import textwrap
 import traceback
 from collections import defaultdict
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 __all__ = ["pypprint"]
 __version__ = "0.3.2"
@@ -117,6 +117,19 @@ def find_names(tree: ast.AST) -> Tuple[Set[str], Set[str]]:
     return defined, undefined
 
 
+def found_name_joiner(
+    trees: Iterable[ast.AST], name_finder: Callable[[ast.AST], Tuple[Set[str], Set[str]]]
+) -> Tuple[Set[str], Set[str]]:
+    """Helper to map a name-finding function over multiple trees."""
+    undefined: Set[str] = set()
+    defined: Set[str] = set()
+    for tree in trees:
+        _def, _undef = name_finder(tree)
+        undefined |= _undef - defined
+        defined |= _def
+    return defined, undefined
+
+
 def dfs_walk(node: ast.AST) -> Iterator[ast.AST]:
     """Helper to iterate over an AST depth-first."""
     stack = [node]
@@ -204,27 +217,25 @@ class PypConfig:
                 return defs, set()
             elif isinstance(part, (ast.Import, ast.Assign, ast.AnnAssign)):
                 return find_names(part)
-            elif hasattr(part, "body") and not isinstance(part, ast.ExceptHandler):
-                # This allows us to do conditional definition
-                defs, undefs = set(), set()
-                branches: List[Set[str]] = [set(), set()]
-                branch_index = {"body": 0, "orelse": 1}
-                if isinstance(part, ast.Try):
-                    branch_index = {"body": 0, "orelse": 0, "handlers": 1}
-                for name, field in ast.iter_fields(part):
-                    if not isinstance(field, list):
-                        assert isinstance(field, ast.AST)
-                        field = [field]
-                    cur_defs: Set[str] = set()
-                    for value in field:
-                        _def, _undef = inner(value)
-                        undefs |= _undef - defs - cur_defs
-                        cur_defs |= _def
-                    if name in branch_index:
-                        branches[branch_index[name]] |= cur_defs
-                    else:
-                        defs |= cur_defs
-                defs |= branches[0] & branches[1]
+            elif isinstance(part, ast.If):
+                defs, undefs = inner(part.test)
+                body_defs, body_undefs = found_name_joiner(part.body, inner)
+                else_defs, else_undefs = found_name_joiner(part.orelse, inner)
+                undefs |= body_undefs - defs
+                undefs |= else_undefs - defs
+                defs |= body_defs & else_defs
+                return defs, undefs
+            elif isinstance(part, ast.Try):
+                body_defs, body_undefs = found_name_joiner(part.body, inner)
+                except_defs, except_undefs = found_name_joiner(part.handlers, inner)
+                else_defs, else_undefs = found_name_joiner(part.orelse, inner)
+                finally_defs, finally_undefs = found_name_joiner(part.finalbody, inner)
+                undefs = body_undefs
+                undefs |= else_undefs - body_defs
+                undefs |= except_undefs
+                defs = (body_defs | else_defs) & except_defs
+                undefs |= finally_undefs - defs
+                defs |= finally_defs
                 return defs, undefs
             elif is_top_level:
                 node_type = type(
@@ -278,12 +289,9 @@ class PypTransform:
         self.tree = parse_input(code)
         self.after_tree = parse_input(after)
 
-        self.defined: Set[str] = set()
-        self.undefined: Set[str] = set()
-        for t in (self.before_tree, self.tree, self.after_tree):
-            _def, _undef = find_names(t)
-            self.undefined |= _undef - self.defined
-            self.defined |= _def
+        self.defined, self.undefined = found_name_joiner(
+            (self.before_tree, self.tree, self.after_tree), find_names
+        )
         # We'll always use sys in ``build_input``, so add it to undefined.
         # This lets config define it or lets us automatically import it later
         # (If before defines it, we'll just let it override...)
