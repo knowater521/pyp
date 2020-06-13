@@ -189,20 +189,11 @@ class PypConfig:
                 itertools.takewhile(lambda l: l.startswith("#"), config_contents.splitlines())
             )
 
-        def add_defs(index: int, defs: Set[str]) -> None:
-            for name in defs:
-                if self.name_to_def.get(name, index) != index:
-                    raise PypError(f"Config has multiple definitions of {repr(name)}")
-                if is_magic_var(name):
-                    raise PypError(f"Config cannot redefine built-in magic variable {repr(name)}")
-                self.name_to_def[name] = index
-
-        def inner(index: int, part: ast.AST) -> None:
+        def inner(part: ast.AST, is_top_level: bool = False) -> Tuple[Set[str], Set[str]]:
             if isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 # Functions and classes have their own scopes, so discard names that they define
                 _, undefs = find_names(part)
-                add_defs(index, {part.name})
-                self.requires[index] |= undefs
+                return {part.name}, undefs
             elif isinstance(part, ast.ImportFrom):
                 if part.module is None:
                     raise PypError(f"Config has unsupported import on line {part.lineno}")
@@ -210,26 +201,50 @@ class PypConfig:
                 if "*" in defs:
                     defs.remove("*")
                     self.wildcard_imports.append(part.module)
-                add_defs(index, defs)
+                return defs, set()
             elif isinstance(part, (ast.Import, ast.Assign, ast.AnnAssign)):
-                defs, undefs = find_names(part)
-                add_defs(index, defs)
-                self.requires[index] |= undefs
-            elif hasattr(part, "body") or hasattr(part, "orelse"):
-                # This allows us to do e.g., basic conditional definition
-                for part in getattr(part, "body", []) + getattr(part, "orelse", []):
-                    inner(index, part)
-            else:
+                return find_names(part)
+            elif hasattr(part, "body") and not isinstance(part, ast.ExceptHandler):
+                # This allows us to do conditional definition
+                defs, undefs = set(), set()
+                branches: List[Set[str]] = [set(), set()]
+                branch_index = {"body": 0, "orelse": 1}
+                if isinstance(part, ast.Try):
+                    branch_index = {"body": 0, "orelse": 0, "handlers": 1}
+                for name, field in ast.iter_fields(part):
+                    if not isinstance(field, list):
+                        assert isinstance(field, ast.AST)
+                        field = [field]
+                    cur_defs: Set[str] = set()
+                    for value in field:
+                        _def, _undef = inner(value)
+                        undefs |= _undef - defs - cur_defs
+                        cur_defs |= _def
+                    if name in branch_index:
+                        branches[branch_index[name]] |= cur_defs
+                    else:
+                        defs |= cur_defs
+                defs |= branches[0] & branches[1]
+                return defs, undefs
+            elif is_top_level:
                 node_type = type(
                     part.value if isinstance(part, ast.Expr) else part
                 ).__name__.lower()
                 raise PypError(
-                    "Config only supports a subset of Python at module level; "
+                    "Config only supports a subset of Python at top level; "
                     f"unsupported construct ({node_type}) on line {part.lineno}"
                 )
+            return find_names(part)
 
         for index, part in enumerate(self.parts):
-            inner(index, part)
+            defs, undefs = inner(part, is_top_level=True)
+            for name in defs:
+                if self.name_to_def.get(name, index) != index:
+                    raise PypError(f"Config has multiple definitions of {repr(name)}")
+                if is_magic_var(name):
+                    raise PypError(f"Config cannot redefine built-in magic variable {repr(name)}")
+                self.name_to_def[name] = index
+            self.requires[index] = undefs
 
 
 class PypTransform:
@@ -269,6 +284,10 @@ class PypTransform:
             _def, _undef = find_names(t)
             self.undefined |= _undef - self.defined
             self.defined |= _def
+        # We'll always use sys in ``build_input``, so add it to undefined.
+        # This lets config define it or lets us automatically import it later
+        # (If before defines it, we'll just let it override...)
+        self.undefined.add("sys")
 
         self.define_pypprint = define_pypprint
         self.config = config
@@ -403,9 +422,6 @@ class PypTransform:
             if len(names) > 1:
                 names_str = ", ".join(names)
                 raise PypError(f"Multiple candidates for {typ} variable: {names_str}")
-
-        # We'll use sys here no matter what; add it to undefined so we import it later
-        self.undefined.add("sys")
 
         if possible_vars["loop"] or possible_vars["index"]:
             # We'll loop over stdin and define loop / index variables
