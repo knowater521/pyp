@@ -359,6 +359,9 @@ for x in sys.stdin:
 """
     compare_scripts(run_pyp(["--explain", "n"]), script2)
 
+    config_mock.return_value = "n = int(x)\no = n + 1\np = o + 3\nq = p + 5"
+    assert run_pyp("p", input="0\n7") == "9\n16"
+
 
 @patch("pyp.get_config_contents")
 def test_config_invalid(config_mock):
